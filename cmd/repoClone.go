@@ -1,40 +1,89 @@
 /*
-Copyright © 2025 NAME HERE <EMAIL ADDRESS>
-
+Copyright © 2025 Bartholomaeuss
 */
 package cmd
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
 
-// repoCloneCmd represents the repoClone command
-var repoCloneCmd = &cobra.Command{
-	Use:   "repoClone",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
+var (
+	repoCloneURL  string
+	repoCloneHost string
+	repoCloneUser string
+)
 
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("repoClone called")
+// repoCloneCmd implements `shipit repo clone`.
+var repoCloneCmd = &cobra.Command{
+	Use:   "clone",
+	Short: "Clone a GitHub repository into a temp directory",
+	Long: `Create a temporary directory, clone the requested repository into it,
+and print the cd command so you can jump into the clone immediately.
+
+Example: shipit repo clone --url https://github.com/foo/bar`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		url := repoCloneURL
+
+		if cmd.Flags().Changed("host") && repoCloneHost == "" {
+			return fmt.Errorf("--host cannot be empty; omit the flag to use the default value")
+		}
+
+		if repoCloneUser == "" {
+			return fmt.Errorf("--user cannot be empty")
+		}
+
+		tempDir, err := os.MkdirTemp("", "shipit-repo-")
+		if err != nil {
+			return fmt.Errorf("failed to create temp directory: %w", err)
+		}
+
+		// git clone expects the destination path not to exist
+		if err := os.Remove(tempDir); err != nil {
+			return fmt.Errorf("failed to prepare temp directory: %w", err)
+		}
+
+		gitCmd := exec.Command("git", "clone", url, tempDir)
+		gitCmd.Stdout = cmd.OutOrStdout()
+		gitCmd.Stderr = cmd.ErrOrStderr()
+
+		if err := gitCmd.Run(); err != nil {
+			return fmt.Errorf("git clone failed: %w", err)
+		}
+
+		absPath, err := filepath.Abs(tempDir)
+		if err != nil {
+			absPath = tempDir
+		}
+
+		remoteDir := fmt.Sprintf("~/%s", filepath.Base(absPath))
+		targetHost := repoCloneHost
+		targetHost = fmt.Sprintf("%s@%s", repoCloneUser, repoCloneHost)
+
+		scpTarget := fmt.Sprintf("%s:~", targetHost)
+		scpCmd := exec.Command("scp", "-r", absPath, scpTarget)
+		scpCmd.Stdout = cmd.OutOrStdout()
+		scpCmd.Stderr = cmd.ErrOrStderr()
+
+		if err := scpCmd.Run(); err != nil {
+			return fmt.Errorf("failed to copy repository to %s: %w", scpTarget, err)
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "\nRepository copied to %s:%s\n", targetHost, remoteDir)
+
+		fmt.Fprintf(cmd.OutOrStdout(), "\nRun:\n  cd %s\n", absPath)
+
+		return nil
 	},
 }
 
 func init() {
-	rootCmd.AddCommand(repoCloneCmd)
-
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// repoCloneCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// repoCloneCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	repoCmd.AddCommand(repoCloneCmd)
+	repoCloneCmd.Flags().StringVar(&repoCloneURL, "url", "", "GitHub repository URL to clone")
+	repoCloneCmd.Flags().StringVar(&repoCloneHost, "host", "test", "SSH host (from ~/.ssh/config) whose home directory receives the clone")
+	repoCloneCmd.Flags().StringVar(&repoCloneUser, "user", "", "SSH username to use for the remote copy")
 }
