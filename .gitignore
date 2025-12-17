@@ -4,6 +4,8 @@
 
 # Go build cache (local override)
 .gocache/
+.cache/
 
 # EXE
 *.exe
+shipit
